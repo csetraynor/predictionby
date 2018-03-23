@@ -26,15 +26,13 @@ md$grade[md$lymph_nodes_positive > 4] <- "3"
 md$lymph_nodes_positive <- NULL
 #standardise continuos covariates and impute with median value
 preProc <- caret::preProcess(md %>% select(size) %>% as.matrix(), method = c("center", "scale"))
-md$size <- predict(preProc, md %>% select(size) %>% as.matrix())
-hist(md$size)
+md$size <- predict(preProc, md %>% select(size) ) %>% unlist
+hist(md$size %>% unlist)
 md$size[is.na(md$size)] <- median(md$size, na.rm = T)
 #Filter missing intclust
 md <- md %>% filter(!is.na(intclust))
-md %>% 
-  VIM::aggr(prop = FALSE, combined = TRUE, numbers = TRUE,
-            sortVars = TRUE, sortCombs = TRUE, plot = TRUE, only.miss = FALSE)
-
+md %>% VIM::aggr(prop = FALSE, combined = TRUE, numbers = TRUE,
+            sortVars = TRUE, sortCombs = TRUE, plot = TRUE)
 #Imputation using Bayesian Logistic Regression
 tmp <- as.factor(md$grade)
 tmp <- mice::mice.impute.polyreg(y = tmp,
@@ -101,26 +99,32 @@ library(limma)
 fit <- limma::lmFit(brcaES, design = as.integer(as.factor(brcaES$intclust)))
 fit <- eBayes(fit)
 print(fit)
-glimpse(fit$p.value)
-test <- exprs(brcaES)[fit$p.value < quantile(fit$p.value, .05),]
-gene_names <- as.data.frame(gene_names[fit$p.value < quantile(fit$p.value, .05),])
-rownames(gene_names) <- gene_names %>% unlist
-brcaES <- Biobase::ExpressionSet(test,
-                                 phenoData = as(md, "AnnotatedDataFrame"),
-                                 featureData =  as(as.data.frame(gene_names), "AnnotatedDataFrame"))
-assertthat::assert_that(all(md$patient_id == brcaES$patient_id))
-rm(list = c("test"))
+
+select_by_level = function(x, level = .9){
+  lower_p <- 0 + ((1 - level)/2)
+  upper_p <- 1 - ((1 - level)/2)
+  
+  out <- fit$p.value < quantile(fit$p.value, probs = lower_p) | fit$p.value > quantile(fit$p.value, probs = upper_p)
+  
+  return(out)
+}
+tmodtest <- select_by_level(x = fit)
+shortES <- brcaES[featureNames(brcaES)[tmodtest]]
+glimpse(featureData(shortES))
+glimpse(exprs(shortES))
+assertthat::assert_that(all(md$patient_id == shortES$patient_id))
+
 #Imputation using impute Biobase
-sum(is.na(exprs(brcaES)))
+sum(is.na(exprs(shortES)))
 # require(MSnbase)
 # brcaMSN <- MSnbase::as.MSnSet.ExpressionSet(brcaES)
 # brcaMSN <- MSnbase::impute(brcaMSN, method = "MinProb")
 # Biobase::exprs(brcaES) <- MSnbase::exprs(brcaMSN)
 # rm(brcaMSN)
-assertthat::assert_that(sum(is.na(Biobase::exprs(brcaES))) == 0)
+assertthat::assert_that(sum(is.na(Biobase::exprs(shortES))) == 0)
 
 #save and clean
 saveRDS(md,  "Med_Data_Clean.rds")
-saveRDS(brcaES, "Gen_Data.rds")
+saveRDS(shortES, "Gen_Data.rds")
 rm(list = ls())
 
